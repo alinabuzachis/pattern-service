@@ -43,7 +43,6 @@ class PatternViewSet(CoreViewSet, ModelViewSet):
                 "message": "Pattern creation initiated. Check task status for progress.",
             },
             status=status.HTTP_202_ACCEPTED,
-            headers=headers,
         )
 
 
