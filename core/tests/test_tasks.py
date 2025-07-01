@@ -9,6 +9,8 @@ from core.models import ControllerLabel
 from core.models import Pattern
 from core.models import PatternInstance
 from core.models import Task
+from core.tasks import run_pattern_instance_task
+from core.tasks import run_pattern_task
 
 
 class SharedDataMixin:

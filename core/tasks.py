@@ -8,6 +8,7 @@ from asgiref.sync import sync_to_async
 from django.db import transaction
 
 from .models import ControllerLabel
+from .models import Pattern
 from .models import PatternInstance
 from .models import Task
 

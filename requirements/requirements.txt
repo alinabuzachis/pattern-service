@@ -57,6 +57,8 @@ propcache==0.3.2
     #   yarl
 pycparser==2.22
     # via cffi
+python-mimeparse==2.0.0
+    # via aiohttp-utils
 sqlparse==0.5.3
     # via
     #   django

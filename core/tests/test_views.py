@@ -6,6 +6,7 @@ from rest_framework.test import APITestCase
 
 from core.models import Task
 from core.tasks import run_pattern_instance_task
+from core.tasks import run_pattern_task
 
 
 class SharedDataMixin:
