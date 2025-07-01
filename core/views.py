@@ -1,6 +1,7 @@
 import uuid
 
 from ansible_base.lib.utils.views.ansible_base import AnsibleBaseView
+from asgiref.sync import async_to_sync
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
@@ -20,6 +21,8 @@ from .serializers import ControllerLabelSerializer
 from .serializers import PatternInstanceSerializer
 from .serializers import PatternSerializer
 from .serializers import TaskSerializer
+from .tasks import run_pattern_instance_task
+from .tasks import run_pattern_task
 
 
 class CoreViewSet(AnsibleBaseView):
@@ -39,6 +42,9 @@ class PatternViewSet(CoreViewSet, ModelViewSet):
             status="Initiated", details={"model": "Pattern", "id": pattern.id}
         )
 
+        async_to_sync(run_pattern_task)(pattern.id, task.id)
+
+        headers = self.get_success_headers(serializer.data)
         return Response(
             {
                 "task_id": task.id,
@@ -47,6 +53,7 @@ class PatternViewSet(CoreViewSet, ModelViewSet):
                 ),
             },
             status=status.HTTP_202_ACCEPTED,
+            headers=headers,
         )
 
 
@@ -70,6 +77,10 @@ class PatternInstanceViewSet(CoreViewSet, ModelViewSet):
             status="Initiated", details={"model": "PatternInstance", "id": instance.id}
         )
 
+        # Schedule async background task to enrich this instance
+        async_to_sync(run_pattern_instance_task)(instance.id, task.id)
+
+        headers = self.get_success_headers(serializer.data)
         return Response(
             {
                 "task_id": task.id,
@@ -78,6 +89,7 @@ class PatternInstanceViewSet(CoreViewSet, ModelViewSet):
                 ),
             },
             status=status.HTTP_202_ACCEPTED,
+            headers=headers,
         )
 
 
