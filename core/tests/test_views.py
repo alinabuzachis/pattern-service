@@ -1,5 +1,3 @@
-from unittest.mock import patch
-
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -101,8 +99,7 @@ class PatternInstanceViewSetTest(SharedDataMixin, APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["organization_id"], 1)
 
-    @patch("core.views.async_to_sync")
-    def test_pattern_instance_create_view(self, mock_async_to_sync):
+    def test_pattern_instance_create_view(self):
         url = reverse("patterninstance-list")
         data = {
             "organization_id": 2,
@@ -119,13 +116,13 @@ class PatternInstanceViewSetTest(SharedDataMixin, APITestCase):
         instance = PatternInstance.objects.get(organization_id=2)
         self.assertIsNotNone(instance)
 
-        task_id = response.data["task_id"]
+        task_id = response.data.get("task_id")
+        self.assertIsInstance(task_id, int)
+
         task = Task.objects.get(id=task_id)
         self.assertEqual(task.status, "Initiated")
-
-        mock_async_to_sync.assert_called_once()
-        self.assertIn("task_id", response.data)
-        self.assertIn("message", response.data)
+        self.assertEqual(task.details.get("model"), "PatternInstance")
+        self.assertEqual(task.details.get("id"), instance.id)
 
 
 class AutomationViewSetTest(SharedDataMixin, APITestCase):
