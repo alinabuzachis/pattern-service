@@ -76,5 +76,25 @@ async def run_pattern_instance_task(instance_id: int, task_id: int):
         await sync_to_async(update_instance, thread_sensitive=True)()
 
         await update_task_status(task, "Completed", {"info": "PatternInstance processed"})
+
+async def run_pattern_task(pattern_id: int, task_id: int):
+    task = await sync_to_async(Task.objects.get, thread_sensitive=True)(id=task_id)
+
+    try:
+        pattern = await sync_to_async(Pattern.objects.get, thread_sensitive=True)(id=pattern_id)
+        await update_task_status(task, "Running", {"info": "Processing pattern"})
+
+        # Skip download if URI is missing
+        if not pattern.collection_version_uri:
+            await update_task_status(task, "Completed", {"info": "Pattern saved without external definition"})
+            return
+
+        await update_task_status(task, "Running", {"info": "Downloading collection tarball"})
+        definition = await download_and_extract_tarball(pattern.collection_version_uri)
+        pattern.pattern_definition = definition
+
+        await sync_to_async(pattern.save, thread_sensitive=True)()
+
+        await update_task_status(task, "Completed", {"info": "Pattern processed successfully"})
     except Exception as e:
         await update_task_status(task, "Failed", {"error": str(e)})
