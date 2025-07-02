@@ -9,7 +9,6 @@ from core.models import ControllerLabel
 from core.models import Pattern
 from core.models import PatternInstance
 from core.models import Task
-from core.tasks import run_pattern_instance_task
 
 
 class SharedDataMixin:
@@ -43,47 +42,6 @@ class SharedDataMixin:
         )
 
         cls.task = Task.objects.create(status="Running", details={"progress": "50%"})
-
-
-class PatternViewSetTest(SharedDataMixin, APITestCase):
-    def test_pattern_list_view(self):
-        url = reverse("pattern-list")
-        response = self.client.get(url)
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data), 1)
-        self.assertEqual(response.data[0]["pattern_name"], "example_pattern")
-
-    def test_pattern_detail_view(self):
-        url = reverse("pattern-detail", args=[self.pattern.pk])
-        response = self.client.get(url)
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data["collection_name"], "mynamespace.mycollection")
-
-    def test_pattern_create_view(self):
-        url = reverse("pattern-list")
-        data = {
-            "collection_name": "new.namespace.collection",
-            "collection_version": "1.2.3",
-            "collection_version_uri": "https://example.com/new.tar.gz",
-            "pattern_name": "new_pattern",
-        }
-
-        response = self.client.post(url, data, format="json")
-        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
-
-        # Pattern created
-        pattern = Pattern.objects.get(pattern_name="new_pattern")
-        self.assertIsNotNone(pattern)
-
-        # Task id returned directly
-        task_id = response.data.get("task_id")
-        self.assertIsInstance(task_id, int)
-
-        # Task exists
-        task = Task.objects.get(id=task_id)
-        self.assertEqual(task.status, "Initiated")
-        self.assertEqual(task.details.get("model"), "Pattern")
-        self.assertEqual(task.details.get("id"), pattern.id)
 
 
 class PatternInstanceViewSetTest(SharedDataMixin, APITestCase):

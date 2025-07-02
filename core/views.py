@@ -1,4 +1,5 @@
 from ansible_base.lib.utils.views.ansible_base import AnsibleBaseView
+from asgiref.sync import async_to_sync
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -15,6 +16,7 @@ from .serializers import ControllerLabelSerializer
 from .serializers import PatternInstanceSerializer
 from .serializers import PatternSerializer
 from .serializers import TaskSerializer
+from .tasks import run_pattern_instance_task
 
 
 class CoreViewSet(AnsibleBaseView):
@@ -53,18 +55,24 @@ class PatternInstanceViewSet(CoreViewSet, ModelViewSet):
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+
         # Save initial PatternInstance
         instance = serializer.save()
 
         # Create a Task entry to track this processing
         task = Task.objects.create(status="Initiated", details={"model": "PatternInstance", "id": instance.id})
 
+        # Schedule async background task to enrich this instance
+        async_to_sync(run_pattern_instance_task)(instance.id, task.id)
+
+        headers = self.get_success_headers(serializer.data)
         return Response(
             {
                 "task_id": task.id,
                 "message": "PatternInstance creation initiated. Check task status for progress.",
             },
             status=status.HTTP_202_ACCEPTED,
+            headers=headers,
         )
 
 
