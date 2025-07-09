@@ -50,12 +50,12 @@ class ModelTestCase(TestCase):
         self.assertEqual(instance.credentials["user"], "admin")
         self.assertIn(self.label, instance.controller_labels.all())
 
-    def test_pattern_instance_unique_constraint(self):
+    def test_pattern_unique_org_id_constraint(self):
         self._create_pattern_instance(org_id=1, controller_project_id=100, controller_ee_id=200, credentials={"token": "abc"})
         with self.assertRaises(IntegrityError):
             self._create_pattern_instance(org_id=1, controller_project_id=101, controller_ee_id=201, credentials={"token": "def"})
 
-    def test_pattern_unique_constraint(self):
+    def test_pattern_unique_info_constraint(self):
         """Test that patterns with same collection_name, collection_version, and pattern_name cannot be created"""
         with self.assertRaises(IntegrityError):
             Pattern.objects.create(
@@ -66,7 +66,6 @@ class ModelTestCase(TestCase):
             )
 
     def test_cascade_delete_pattern_to_instances(self):
-        """Test that deleting a pattern cascades to delete related pattern instances"""
         instance = self._create_pattern_instance(org_id=3, controller_project_id=30, controller_ee_id=40, credentials={"token": "xyz"})
 
         # Verify instance exists
@@ -79,7 +78,6 @@ class ModelTestCase(TestCase):
         self.assertFalse(PatternInstance.objects.filter(id=instance.id).exists())
 
     def test_cascade_delete_instance_to_automations(self):
-        """Test that deleting a pattern instance cascades to delete related automations"""
         instance = self._create_pattern_instance(org_id=4, controller_project_id=50, controller_ee_id=60, credentials={"token": "xyz"})
 
         automation = self._create_automation(pattern_instance=instance, automation_id=99999, primary=True)
@@ -114,7 +112,7 @@ class ModelTestCase(TestCase):
             )
 
     def test_pattern_character_length_limits(self):
-        """Test max_length character length validation for Pattern fields"""
+        """Test max character length validation for Pattern fields"""
         with self.assertRaises(ValidationError):
             pattern = Pattern(collection_name="a" * 201, collection_version="1.0.0", pattern_name="test_pattern", pattern_definition={})
             pattern.full_clean()
@@ -138,7 +136,7 @@ class ModelTestCase(TestCase):
             pattern.full_clean()
 
     def test_automation_character_length_limits(self):
-        """Test automation_type max_length=200 character length validation for Automation fields"""
+        """Test automation_type max character length validation for Automation fields"""
         instance = self._create_pattern_instance(org_id=6)
 
         with self.assertRaises(ValidationError):
@@ -150,7 +148,7 @@ class ModelTestCase(TestCase):
             automation.full_clean()
 
     def test_task_character_length_limits(self):
-        """Test max_length=20 character length validation for Task fields"""
+        """Test max character length validation for Task fields"""
         with self.assertRaises(ValidationError):
             task = Task(status="a" * 21, details={})
             task.full_clean()
@@ -167,7 +165,7 @@ class ModelTestCase(TestCase):
         self.assertTrue(automation.primary)
 
     def test_task_all_valid_status_choices(self):
-        """Test all valid status choices for Task - covers both with and without details"""
+        """Test all valid status choices for Task; covers both with and without details"""
         valid_statuses = ["Initiated", "Running", "Completed", "Failed"]
         for status in valid_statuses:
             task_with_details = Task.objects.create(status=status, details={"test": "data"})
@@ -185,7 +183,6 @@ class ModelTestCase(TestCase):
             task.full_clean()  # triggers choice validation
 
     def test_automation_invalid_type_choice(self):
-        """Test that invalid automation_type raises ValidationError"""
         instance = self._create_pattern_instance(org_id=7)
 
         automation = Automation(
