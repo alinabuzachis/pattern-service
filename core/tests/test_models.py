@@ -182,7 +182,7 @@ class ModelTestCase(TestCase):
     def test_task_invalid_status_choice(self):
         task = Task(status="Unknown", details={})
         with self.assertRaises(ValidationError):
-            task.full_clean()
+            task.full_clean()  # triggers choice validation
 
     def test_automation_invalid_type_choice(self):
         """Test that invalid automation_type raises ValidationError"""
