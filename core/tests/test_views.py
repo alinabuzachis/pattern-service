@@ -99,7 +99,6 @@ class PatternViewSetTest(SharedDataMixin, APITestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["collection_name"], "mynamespace.mycollection")
-    
 
     @patch("core.views.async_to_sync")
     def test_pattern_create_view(self, mock_async_to_sync):
