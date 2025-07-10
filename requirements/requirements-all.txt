@@ -103,3 +103,5 @@ typing-extensions==4.13.2
     # via mypy
 yarl==1.20.1
     # via aiohttp
+aiohttp
+aiohttp-utils
