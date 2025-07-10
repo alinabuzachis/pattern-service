@@ -9,7 +9,7 @@ from pattern_service.core.models import ControllerLabel
 from pattern_service.core.models import Pattern
 from pattern_service.core.models import PatternInstance
 from pattern_service.core.models import Task
-from pattern_service.core.utils import run_pattern_task
+from pattern_service.core.view_utils import run_pattern_task
 
 
 

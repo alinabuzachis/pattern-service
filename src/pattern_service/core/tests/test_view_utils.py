@@ -7,7 +7,7 @@ from pattern_service.core.models import ControllerLabel
 from pattern_service.core.models import Pattern
 from pattern_service.core.models import PatternInstance
 from pattern_service.core.models import Task
-from pattern_service.core.utils import run_pattern_task
+from pattern_service.core.view_utils import run_pattern_task
 
 
 class SharedDataMixin:
@@ -48,7 +48,7 @@ class UtilsTests(SharedDataMixin, TestCase):
         async def _run_pattern_task():
             await run_pattern_task(self.pattern.id, task.id)
 
-        with patch("pattern_service.core.utils.download_collection", new=mock_download_collectionl):
+        with patch("pattern_service.core.view_utils.download_collection", new=mock_download_collectionl):
             async_to_sync(_run_pattern_task)()
 
         task.refresh_from_db()

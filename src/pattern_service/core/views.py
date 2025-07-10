@@ -26,7 +26,7 @@ from pattern_service.core.serializers import (
     TaskSerializer,
 )
 from pattern_service.core.tasks.worker import create_resource_state
-from pattern_service.core.utils import run_pattern_task
+from pattern_service.core.view_utils import run_pattern_task
 
 
 class CoreViewSet(AnsibleBaseView):
