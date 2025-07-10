@@ -9,31 +9,30 @@ from core.models import PatternInstance
 from core.models import Task
 
 
-class ModelTestCase(TestCase):
-    def setUp(self):
-        self.pattern = Pattern.objects.create(
+class SharedDataMixin:
+    @classmethod
+    def setUpTestData(cls):
+        cls.pattern = Pattern.objects.create(
             collection_name="mynamespace.mycollection",
             collection_version="1.0.0",
             collection_version_uri="https://example.com/mynamespace/mycollection/",
             pattern_name="example_pattern",
             pattern_definition={"key": "value"},
         )
-        self.label = ControllerLabel.objects.create(label_id=5)
+        cls.label = ControllerLabel.objects.create(label_id=5)
 
-    def _create_pattern_instance(self, org_id, **kwargs):
-        """Helper method to create pattern instance with defaults"""
+    def create_pattern_instance(cls, org_id, **kwargs):
         defaults = {
             'controller_project_id': 10,
             'controller_ee_id': 20,
             'credentials': {"user": "admin"},
             'executors': [],
-            'pattern': self.pattern,
+            'pattern': cls.pattern,
         }
         defaults.update(kwargs)
         return PatternInstance.objects.create(organization_id=org_id, **defaults)
 
-    def _create_automation(self, pattern_instance, **kwargs):
-        """Helper method to create automation with defaults"""
+    def create_automation(cls, pattern_instance, **kwargs):
         defaults = {
             'automation_type': "job_template",
             'automation_id': 12345,
@@ -42,8 +41,10 @@ class ModelTestCase(TestCase):
         defaults.update(kwargs)
         return Automation.objects.create(pattern_instance=pattern_instance, **defaults)
 
+
+class ModelTestCase(SharedDataMixin, TestCase):
     def test_create_pattern_instance(self):
-        instance = self._create_pattern_instance(org_id=1, executors=[{"type": "podman"}])
+        instance = self.create_pattern_instance(org_id=1, executors=[{"type": "podman"}])
         instance.controller_labels.add(self.label)
         self.assertEqual(instance.pattern, self.pattern)
         self.assertEqual(instance.organization_id, 1)
@@ -51,9 +52,9 @@ class ModelTestCase(TestCase):
         self.assertIn(self.label, instance.controller_labels.all())
 
     def test_pattern_unique_org_id_constraint(self):
-        self._create_pattern_instance(org_id=1, controller_project_id=100, controller_ee_id=200, credentials={"token": "abc"})
+        self.create_pattern_instance(org_id=1, controller_project_id=100, controller_ee_id=200, credentials={"token": "abc"})
         with self.assertRaises(IntegrityError):
-            self._create_pattern_instance(org_id=1, controller_project_id=101, controller_ee_id=201, credentials={"token": "def"})
+            self.create_pattern_instance(org_id=1, controller_project_id=101, controller_ee_id=201, credentials={"token": "def"})
 
     def test_pattern_unique_info_constraint(self):
         """Test that patterns with same collection_name, collection_version, and pattern_name cannot be created"""
@@ -66,7 +67,7 @@ class ModelTestCase(TestCase):
             )
 
     def test_cascade_delete_pattern_to_instances(self):
-        instance = self._create_pattern_instance(org_id=3, controller_project_id=30, controller_ee_id=40, credentials={"token": "xyz"})
+        instance = self.create_pattern_instance(org_id=3, controller_project_id=30, controller_ee_id=40, credentials={"token": "xyz"})
 
         # Verify instance exists
         self.assertTrue(PatternInstance.objects.filter(id=instance.id).exists())
@@ -78,9 +79,9 @@ class ModelTestCase(TestCase):
         self.assertFalse(PatternInstance.objects.filter(id=instance.id).exists())
 
     def test_cascade_delete_instance_to_automations(self):
-        instance = self._create_pattern_instance(org_id=4, controller_project_id=50, controller_ee_id=60, credentials={"token": "xyz"})
+        instance = self.create_pattern_instance(org_id=4, controller_project_id=50, controller_ee_id=60, credentials={"token": "xyz"})
 
-        automation = self._create_automation(pattern_instance=instance, automation_id=99999, primary=True)
+        automation = self.create_automation(pattern_instance=instance, automation_id=99999, primary=True)
 
         # Verify automation exists
         self.assertTrue(Automation.objects.filter(id=automation.id).exists())
@@ -93,7 +94,7 @@ class ModelTestCase(TestCase):
 
     def test_pattern_instance_null_fields(self):
         """Test creating pattern instance with null/optional fields"""
-        instance = self._create_pattern_instance(
+        instance = self.create_pattern_instance(
             org_id=5, controller_project_id=None, controller_ee_id=None, executors=None  # This can be null  # This can be null  # This can be null
         )
 
@@ -137,7 +138,7 @@ class ModelTestCase(TestCase):
 
     def test_automation_character_length_limits(self):
         """Test automation_type max character length validation for Automation fields"""
-        instance = self._create_pattern_instance(org_id=6)
+        instance = self.create_pattern_instance(org_id=6)
 
         with self.assertRaises(ValidationError):
             automation = Automation(
@@ -159,8 +160,8 @@ class ModelTestCase(TestCase):
             ControllerLabel.objects.create(label_id=5)
 
     def test_create_automation(self):
-        instance = self._create_pattern_instance(org_id=2, controller_project_id=99, controller_ee_id=98, credentials={}, executors=[])
-        automation = self._create_automation(pattern_instance=instance, primary=True)
+        instance = self.create_pattern_instance(org_id=2, controller_project_id=99, controller_ee_id=98, credentials={}, executors=[])
+        automation = self.create_automation(pattern_instance=instance, primary=True)
         self.assertEqual(automation.automation_type, "job_template")
         self.assertTrue(automation.primary)
 
@@ -183,7 +184,7 @@ class ModelTestCase(TestCase):
             task.full_clean()  # triggers choice validation
 
     def test_automation_invalid_type_choice(self):
-        instance = self._create_pattern_instance(org_id=7)
+        instance = self.create_pattern_instance(org_id=7)
 
         automation = Automation(
             automation_type="invalid_type",
@@ -195,9 +196,9 @@ class ModelTestCase(TestCase):
 
     def test_automation_default_values(self):
         """Test that Automation model has correct default values"""
-        instance = self._create_pattern_instance(org_id=8)
+        instance = self.create_pattern_instance(org_id=8)
 
-        automation = self._create_automation(
+        automation = self.create_automation(
             pattern_instance=instance
             # Not setting primary, should default to False
         )
