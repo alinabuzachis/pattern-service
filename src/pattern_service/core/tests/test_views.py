@@ -9,7 +9,7 @@ from pattern_service.core.models import ControllerLabel
 from pattern_service.core.models import Pattern
 from pattern_service.core.models import PatternInstance
 from pattern_service.core.models import Task
-from pattern_service.core.tasks import run_pattern_task
+from pattern_service.core.utils import run_pattern_task
 
 
 
@@ -105,7 +105,7 @@ class PatternViewSetTest(SharedDataMixin, APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["collection_name"], "mynamespace.mycollection")
 
-    @patch("core.views.async_to_sync")
+    @patch("pattern_service.core.views.async_to_sync")
     def test_pattern_create_view(self, mock_async_to_sync):
         url = reverse("pattern-list")
         data = {

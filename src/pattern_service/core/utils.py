@@ -10,8 +10,8 @@ import urllib.parse
 
 import aiohttp
 
-from .models import Pattern
-from .models import Task
+from pattern_service.core.models import Pattern
+from pattern_service.core.models import Task
 
 logger = logging.getLogger(__name__)
 
