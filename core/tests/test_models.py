@@ -53,6 +53,29 @@ class PatternModelTestCase(SharedDataMixin, TestCase):
                 pattern_definition={"different": "value"},
             )
 
+    def test_pattern_character_length_limits(self):
+        with self.assertRaises(ValidationError):
+            pattern = Pattern(collection_name="a" * 201, collection_version="1.0.0", pattern_name="test_pattern", pattern_definition={})
+            pattern.full_clean()
+
+        with self.assertRaises(ValidationError):
+            pattern = Pattern(collection_name="test.collection", collection_version="a" * 51, pattern_name="test_pattern", pattern_definition={})
+            pattern.full_clean()
+
+        with self.assertRaises(ValidationError):
+            pattern = Pattern(collection_name="test.collection", collection_version="1.0.0", pattern_name="a" * 201, pattern_definition={})
+            pattern.full_clean()
+
+        with self.assertRaises(ValidationError):
+            pattern = Pattern(
+                collection_name="test.collection",
+                collection_version="1.0.0",
+                pattern_name="test_pattern",
+                collection_version_uri="a" * 201,
+                pattern_definition={},
+            )
+            pattern.full_clean()
+
 
 class PatternControllerLabelModelTestCase(SharedDataMixin, TestCase):
     def test_controller_label_unique_constraint(self):
@@ -105,29 +128,6 @@ class PatternInstanceModelTestCase(SharedDataMixin, TestCase):
                 credentials={"user": "admin"},
                 pattern=self.pattern,
             )
-
-    def test_pattern_character_length_limits(self):
-        with self.assertRaises(ValidationError):
-            pattern = Pattern(collection_name="a" * 201, collection_version="1.0.0", pattern_name="test_pattern", pattern_definition={})
-            pattern.full_clean()
-
-        with self.assertRaises(ValidationError):
-            pattern = Pattern(collection_name="test.collection", collection_version="a" * 51, pattern_name="test_pattern", pattern_definition={})
-            pattern.full_clean()
-
-        with self.assertRaises(ValidationError):
-            pattern = Pattern(collection_name="test.collection", collection_version="1.0.0", pattern_name="a" * 201, pattern_definition={})
-            pattern.full_clean()
-
-        with self.assertRaises(ValidationError):
-            pattern = Pattern(
-                collection_name="test.collection",
-                collection_version="1.0.0",
-                pattern_name="test_pattern",
-                collection_version_uri="a" * 201,
-                pattern_definition={},
-            )
-            pattern.full_clean()
 
 
 class PatternAutomationModelTestCase(SharedDataMixin, TestCase):
