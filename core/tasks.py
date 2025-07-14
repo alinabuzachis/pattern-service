@@ -1,3 +1,4 @@
+import contextlib
 import io
 import json
 import logging
@@ -5,6 +6,7 @@ import os
 import shutil
 import tarfile
 import tempfile
+from typing import Iterator
 
 import aiohttp
 from asgiref.sync import sync_to_async
@@ -25,9 +27,10 @@ def update_task_status(task: Task, status_: str, details: dict):
     task.save()
 
 
-def download_collection(url: str, collection: str, version: str) -> str:
+@contextlib.contextmanager
+def download_collection(url: str, collection: str, version: str) -> Iterator[str]:
     """
-    Asynchronously downloads and extracts a collection to a path.
+    Downloads and extracts a collection to a temporary path.
     Returns the path where files were extracted.
     """
     temp_base_dir = tempfile.mkdtemp()
@@ -44,11 +47,9 @@ def download_collection(url: str, collection: str, version: str) -> str:
             tar.extractall(path=collection_path, filter="data")
 
         logger.info(f"Collection extracted to {collection_path}")
-        return collection_path  # Return the path, not its contents
-    except Exception:
-        # If anything fails, clean up the directory and re-raise the error
+        yield collection_path  # Yield the path to the caller
+    finally:
         shutil.rmtree(temp_base_dir)
-        raise
 
 
 async def run_pattern_instance_task(instance_id: int, task_id: int):
@@ -88,8 +89,10 @@ async def run_pattern_instance_task(instance_id: int, task_id: int):
 async def run_pattern_task(pattern_id: int, task_id: int):
     task = await Task.objects.aget(id=task_id)
 def run_pattern_task(pattern_id: int, task_id: int):
+    """
+    Orchestrates downloading a collection and saving a pattern definition.
+    """
     task = Task.objects.get(id=task_id)
-    collection_path = None
 
     try:
         pattern = Pattern.objects.get(id=pattern_id)
@@ -107,14 +110,17 @@ def run_pattern_task(pattern_id: int, task_id: int):
         collection_version = pattern.collection_version
         pattern_name = pattern.pattern_name
 
-        collection_path = download_collection(pattern.collection_version_uri, collection_name, collection_version)
-        path_to_definition = os.path.join(collection_path, "extensions", "patterns", pattern_name, "meta", "pattern.json")
-        with open(path_to_definition, "r") as file:
-            definition = json.load(file)
+        with download_collection(pattern.collection_version_uri, collection_name, collection_version) as collection_path:
+            path_to_definition = os.path.join(collection_path, "extensions", "patterns", pattern_name, "meta", "pattern.json")
 
-        pattern.pattern_definition = definition
-        pattern.save()
+            with open(path_to_definition, "r") as file:
+                definition = json.load(file)
+
+            pattern.pattern_definition = definition
+            pattern.save()
+
         update_task_status(task, "Completed", {"info": "Pattern processed successfully"})
+
     except FileNotFoundError:
         logger.error(f"Could not find pattern definition for task {task_id}")
         update_task_status(task, "Failed", {"error": "Pattern definition file not found in collection."})
@@ -122,7 +128,3 @@ def run_pattern_task(pattern_id: int, task_id: int):
     except Exception as e:
         logger.error(f"Task {task_id} failed: {e}")
         update_task_status(task, "Failed", {"error": str(e)})
-
-    finally:
-        if collection_path and os.path.exists(collection_path):
-            shutil.rmtree(os.path.dirname(collection_path))
