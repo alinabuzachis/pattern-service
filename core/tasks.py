@@ -7,15 +7,17 @@ import shutil
 import tarfile
 import tempfile
 from typing import Iterator
-
-import aiohttp
-from asgiref.sync import sync_to_async
 from django.db import transaction
+
+from requests import Session
+from requests.auth import HTTPBasicAuth
+from django.conf import settings
+
 import requests
 
-from .models import ControllerLabel
 from .models import Pattern
 from .models import PatternInstance
+from .models import ControllerLabel
 from .models import Task
 
 logger = logging.getLogger(__name__)
@@ -52,42 +54,189 @@ def download_collection(url: str, collection: str, version: str) -> Iterator[str
         shutil.rmtree(temp_base_dir)
 
 
-async def run_pattern_instance_task(instance_id: int, task_id: int):
-    task = await sync_to_async(Task.objects.get, thread_sensitive=True)(id=task_id)
+def get_http_session() -> Session:
+    """Returns a session with Basic Auth for AAP."""
+    session = Session()
+    session.auth = HTTPBasicAuth(settings.AAP_USERNAME, settings.AAP_PASSWORD)
+    session.verify = settings.AAP_VERIFY_SSL
+    session.headers.update({'Content-Type': 'application/json'})
 
-    try:
-        instance = await sync_to_async(PatternInstance.objects.select_related("pattern").get, thread_sensitive=True)(id=instance_id)
-        pattern = instance.pattern
+    return session
 
-        # Make sure the Pattern has pattern_definition loaded (could be empty)
-        pattern_def = pattern.pattern_definition or {}
+def post_api(path: str, data: dict) -> dict:
+    session = get_http_session()
+    response = session.post(f"{settings.AAP_URL.rstrip('/')}/api/v2{path}", json=data)
+    response.raise_for_status()
 
-        await update_task_status(task, "Running", {"info": "Processing PatternInstance"})
+    return response.json()
 
-        if not pattern_def:
-            raise Exception("Pattern definition is missing. Cannot process instance.")
 
-        # Update instance fields with data from pattern definition inside transaction
-        def update_instance():
-            with transaction.atomic():
-                if "execution_environment_id" in pattern_def:
-                    instance.controller_ee_id = int(pattern_def["execution_environment_id"])
-                if "executors" in pattern_def:
-                    instance.executors = pattern_def["executors"]
-                if "controller_labels" in pattern_def:
-                    for label_id in pattern_def["controller_labels"]:
-                        label_obj, _ = ControllerLabel.objects.get_or_create(label_id=label_id)
-                        instance.controller_labels.add(label_obj)
+def get_api(path: str, params=None) -> dict:
+    session = get_http_session()
+    response = session.get(f"{settings.AAP_URL.rstrip('/')}/api/v2{path}", params=params)
+    response.raise_for_status()
 
-                instance.controller_project_id = hash(pattern.pattern_name) % 10**6
-                instance.save()
+    return response.json()
 
-        await sync_to_async(update_instance, thread_sensitive=True)()
 
-        await update_task_status(task, "Completed", {"info": "PatternInstance processed"})
+def create_controller_project(instance: PatternInstance, pattern: Pattern, pattern_def: dict) -> int:
+    """
+    Creates a controller project on AAP using the pattern definition.
 
-async def run_pattern_task(pattern_id: int, task_id: int):
-    task = await Task.objects.aget(id=task_id)
+    Args:
+        instance: The PatternInstance object.
+        pattern: The related Pattern object.
+        pattern_def: The pattern definition dictionary.
+
+    Returns:
+        The created project ID.
+    """
+    project_def = pattern_def["aap_resources"]["controller_project"]
+    project_def.update({
+        "organization": instance.organization_id,
+        "scm_type": "archive",
+        "scm_url": pattern.collection_version_uri,
+        "credential": instance.credentials.get("project"),
+    })
+    logger.debug(f"Project definition: {project_def}")
+    response = post_api("/projects/", project_def)
+
+    return response["id"]
+
+
+def create_execution_environment(instance: PatternInstance, pattern_def: dict) -> int:
+    """
+    Creates an execution environment for the controller.
+
+    Args:
+        instance: The PatternInstance object.
+        pattern_def: The pattern definition dictionary.
+
+    Returns:
+        The created execution environment ID.
+    """
+    ee_def = pattern_def["aap_resources"]["controller_execution_environment"]
+    image_name = ee_def.pop("image_name")
+    ee_def.update({
+        "organization": instance.organization_id,
+        "credential": instance.credentials.get("ee"),
+        "image": f"{urllib.parse.urlparse(settings.AAP_URL).netloc}/{image_name}",
+        "pull": ee_def.get("pull") or "missing",
+    })
+    logger.debug(f"EE definition: {ee_def}")
+    return client.create_controller_ee(ee_def)
+
+
+def create_labels(instance: PatternInstance, pattern_def: dict) -> List[ControllerLabel]:
+    """
+    Creates controller labels and returns model instances.
+
+    Args:
+        instance: The PatternInstance object.
+        pattern_def: The pattern definition dictionary.
+
+    Returns:
+        List of ControllerLabel model instances.
+    """
+    labels = []
+    for name in pattern_def["aap_resources"]["controller_labels"]:
+        label_def = {"name": name, "organization": instance.organization_id}
+        logger.debug(f"Label definition: {label_def}")
+        label_id = client.create_controller_label(label_def)
+        label_obj, _ = ControllerLabel.objects.get_or_create(label_id=label_id)
+        labels.append(label_obj)
+    return labels
+
+
+def create_job_templates(
+    instance: PatternInstance,
+    pattern_def: dict,
+    project_id: int,
+    ee_id: int
+) -> List[Dict[str, Any]]:
+    """
+    Creates job templates and associated surveys.
+
+    Args:
+        instance: The PatternInstance object.
+        pattern_def: The pattern definition dictionary.
+        project_id: Controller project ID.
+        ee_id: Execution environment ID.
+
+    Returns:
+        List of dictionaries describing created automations.
+    """
+    automations = []
+    for jt in pattern_def["aap_resources"]["controller_job_templates"]:
+        survey = jt.pop("survey", None)
+        primary = jt.pop("primary", False)
+        jt.update({
+            "organization": instance.organization_id,
+            "project": project_id,
+            "execution_environment": ee_id,
+            "playbook": f"extensions/patterns/{pattern_def['name']}/playbooks/{jt['playbook']}",
+            "ask_inventory_on_launch": True,
+        })
+        logger.debug(f"Job template: {jt}")
+        jt_id = client.create_controller_job_template(jt)
+        if survey:
+            client.create_controller_job_template_survey(jt_id, survey)
+        automations.append({"type": "job_template", "id": jt_id, "primary": primary})
+    return automations
+
+
+def save_instance_state(
+    instance: PatternInstance,
+    project_id: int,
+    ee_id: int,
+    labels: List[ControllerLabel],
+    automations: List[Dict[str, Any]]
+) -> None:
+    """
+    Saves the instance and links labels and automations inside a DB transaction.
+
+    Args:
+        instance: The PatternInstance to update.
+        project_id: Controller project ID.
+        ee_id: Execution environment ID.
+        labels: List of ControllerLabel objects.
+        automations: List of job template metadata.
+    """
+    with transaction.atomic():
+        instance.controller_project_id = project_id
+        instance.controller_execution_environment_id = ee_id
+        instance.save()
+        for label in labels:
+            instance.controller_labels.add(label)
+        for auto in automations:
+            instance.automations.create(
+                automation_type=auto["type"],
+                automation_id=auto["id"],
+                primary=auto["primary"],
+            )
+
+
+def assign_execute_roles(
+    executors: Dict[str, List[Any]],
+    automations: List[Dict[str, Any]]
+) -> None:
+    """
+    Assigns JobTemplate Execute role to teams and users.
+
+    Args:
+        executors: Dictionary with "teams" and "users" lists.
+        automations: List of job template metadata.
+    """
+    if not executors["teams"] and not executors["users"]:
+        return
+    role_id = client.get_role_definition_id("JobTemplate Execute")
+    for auto in automations:
+        for team in executors["teams"]:
+            client.create_controller_role_assignment("team", auto["id"], role_id, str(team))
+        for user in executors["users"]:
+            client.create_controller_role_assignment("user", auto["id"], role_id, str(user))
+
+
 def run_pattern_task(pattern_id: int, task_id: int):
     """
     Orchestrates downloading a collection and saving a pattern definition.
@@ -127,4 +276,41 @@ def run_pattern_task(pattern_id: int, task_id: int):
 
     except Exception as e:
         logger.error(f"Task {task_id} failed: {e}")
+        update_task_status(task, "Failed", {"error": str(e)})
+
+
+def run_pattern_instance_task(instance_id: int, task_id: int):
+    task = Task.objects.get(id=task_id)
+
+    try:
+        instance = PatternInstance.objects.select_related("pattern").get(id=instance_id)
+        pattern = instance.pattern
+        pattern_def = pattern.pattern_definition or {}
+
+        update_task_status(task, "Running", {"info": "Processing PatternInstance"})
+
+        if not pattern_def:
+            raise ValueError("Pattern definition is missing.")
+
+        update_task_status(task, "Running", {"info": "Creating controller project"})
+        project_id = create_controller_project(instance, pattern, pattern_def)
+
+        update_task_status(task, "Running", {"info": "Creating execution environment"})
+        ee_id = create_execution_environment(instance, pattern_def)
+
+        update_task_status(task, "Running", {"info": "Creating controller labels"})
+        labels = create_labels(instance, pattern_def)
+
+        update_task_status(task, "Running", {"info": "Creating job templates"})
+        automations = create_job_templates(instance, pattern_def, project_id, ee_id)
+
+        update_task_status(task, "Running", {"info": "Saving instance and related objects"})
+        save_instance_state(instance, project_id, ee_id, labels, automations)
+
+        update_task_status(task, "Running", {"info": "Assigning executor roles"})
+        assign_execute_roles(instance.executors, automations)
+
+        update_task_status(task, "Completed", {"info": "PatternInstance processed"})
+    except Exception as e:
+        logger.exception("Failed to process PatternInstance.")
         update_task_status(task, "Failed", {"error": str(e)})
