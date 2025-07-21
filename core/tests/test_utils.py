@@ -1,7 +1,11 @@
-import requests
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
-from core.tasks import get_http_session, _aap_session, post
+import requests
+
+from core.tasks import _aap_session
+from core.tasks import get_http_session
+from core.tasks import post
 
 
 def _fake_response(status_code: int, payload: dict | list) -> requests.Response:
@@ -22,6 +26,7 @@ def _fake_response(status_code: int, payload: dict | list) -> requests.Response:
 # 1. get_http_session()
 # ---------------------------------------------------------------------------
 
+
 def test_get_http_session_caches():
     """Subsequent calls without force_refresh must return the *same* object."""
     s1 = get_http_session()
@@ -36,6 +41,7 @@ def test_get_http_session_caches():
 # 2. post(): success case
 # ---------------------------------------------------------------------------
 
+
 @patch("core.tasks.get_http_session")
 def test_post_success(mock_get_http_session):
     session = MagicMock()
@@ -49,6 +55,7 @@ def test_post_success(mock_get_http_session):
 # ---------------------------------------------------------------------------
 # post(): 400 duplicate then lookup
 # ---------------------------------------------------------------------------
+
 
 @patch("core.tasks.get_http_session")
 def test_post_duplicate_name(mock_get_http_session):

@@ -6,24 +6,25 @@ import os
 import shutil
 import tarfile
 import tempfile
-from typing import Iterator, Optional, Sequence
-from django.db import transaction
-
+from typing import Any
+from typing import Dict
+from typing import Iterator
+from typing import List
+from typing import Optional
+from typing import Sequence
 from urllib.parse import urlparse
-from requests import Session
-from requests.auth import HTTPBasicAuth
-from django.conf import settings
 
 import requests
+from django.conf import settings
+from django.db import transaction
+from pattern_service.settings.aap import AAP_SETTINGS
+from requests import Session
+from requests.auth import HTTPBasicAuth
 
+from .models import ControllerLabel
 from .models import Pattern
 from .models import PatternInstance
-from .models import ControllerLabel
 from .models import Task
-from pattern_service.settings.aap import AAP_SETTINGS
-
-from typing import List, Dict, Any
-
 
 logger = logging.getLogger(__name__)
 
@@ -118,9 +119,7 @@ def post(
         if exc.response.status_code != 400:
             raise
 
-        logger.debug(
-            f"AAP POST {url} returned 400. Attempting dedup lookup with keys {str(dedupe_keys)}"
-        )
+        logger.debug(f"AAP POST {url} returned 400. Attempting dedup lookup with keys {str(dedupe_keys)}")
 
         # Build ?name=foo&organization=123 query if those keys exist in *data*
         params = {k: data[k] for k in dedupe_keys if k in data}
@@ -155,13 +154,15 @@ def create_controller_project(instance: PatternInstance, pattern: Pattern, patte
         The created project ID.
     """
     project_def = pattern_def["aap_resources"]["controller_project"]
-    project_def.update({
-        "organization": instance.organization_id,
-        "scm_type": "archive",
-        "scm_url": pattern.collection_version_uri,
-        "credential": instance.credentials.get("project"),
-    })
-    
+    project_def.update(
+        {
+            "organization": instance.organization_id,
+            "scm_type": "archive",
+            "scm_url": pattern.collection_version_uri,
+            "credential": instance.credentials.get("project"),
+        }
+    )
+
     logger.debug(f"Project definition: {project_def}")
     response = post("/projects/", project_def)
 
@@ -181,12 +182,14 @@ def create_execution_environment(instance: PatternInstance, pattern_def: Dict) -
     """
     ee_def = pattern_def["aap_resources"]["controller_execution_environment"]
     image_name = ee_def.pop("image_name")
-    ee_def.update({
-        "organization": instance.organization_id,
-        "credential": instance.credentials.get("ee"),
-        "image": f"{urlparse.urlparse(AAP_SETTINGS.url).netloc}/{image_name}",
-        "pull": ee_def.get("pull") or "missing",
-    })
+    ee_def.update(
+        {
+            "organization": instance.organization_id,
+            "credential": instance.credentials.get("ee"),
+            "image": f"{urlparse.urlparse(AAP_SETTINGS.url).netloc}/{image_name}",
+            "pull": ee_def.get("pull") or "missing",
+        }
+    )
     logger.debug(f"Execution Environment definition: {ee_def}")
     response = post("/execution_environments/", ee_def)
 
@@ -206,12 +209,9 @@ def create_labels(instance: PatternInstance, pattern_def: Dict) -> List[Controll
     """
     labels = []
     for name in pattern_def["aap_resources"]["controller_labels"]:
-        label_def = {
-            "name": name,
-            "organization": instance.organization_id
-        }
+        label_def = {"name": name, "organization": instance.organization_id}
         logger.debug(f"Creating label with definition: {label_def}")
-        
+
         results = post("/labels/", label_def)
         label_obj, _ = ControllerLabel.objects.get_or_create(label_id=results["id"])
         labels.append(label_obj)
@@ -219,12 +219,7 @@ def create_labels(instance: PatternInstance, pattern_def: Dict) -> List[Controll
     return labels
 
 
-def create_job_templates(
-    instance: PatternInstance,
-    pattern_def: Dict,
-    project_id: int,
-    ee_id: int
-) -> List[Dict[str, Any]]:
+def create_job_templates(instance: PatternInstance, pattern_def: Dict, project_id: int, ee_id: int) -> List[Dict[str, Any]]:
     """
     Creates job templates and associated surveys.
 
@@ -261,22 +256,12 @@ def create_job_templates(
             logger.debug(f"Adding survey to job template {jt_id}")
             post(f"/job_templates/{jt_id}/survey_spec/", {"spec": survey})
 
-        automations.append({
-            "type": "job_template",
-            "id": jt_id,
-            "primary": primary
-        })
+        automations.append({"type": "job_template", "id": jt_id, "primary": primary})
 
     return automations
 
 
-def save_instance_state(
-    instance: PatternInstance,
-    project_id: int,
-    ee_id: int,
-    labels: List[ControllerLabel],
-    automations: List[Dict[str, Any]]
-) -> None:
+def save_instance_state(instance: PatternInstance, project_id: int, ee_id: int, labels: List[ControllerLabel], automations: List[Dict[str, Any]]) -> None:
     """
     Saves the instance and links labels and automations inside a DB transaction.
 
@@ -301,10 +286,7 @@ def save_instance_state(
             )
 
 
-def assign_execute_roles(
-    executors: Dict[str, List[Any]],
-    automations: List[Dict[str, Any]]
-) -> None:
+def assign_execute_roles(executors: Dict[str, List[Any]], automations: List[Dict[str, Any]]) -> None:
     """
     Assigns JobTemplate Execute role to teams and users.
 
@@ -325,21 +307,27 @@ def assign_execute_roles(
     for auto in automations:
         jt_id = auto["id"]
         for team_id in executors.get("teams", []):
-            post("/role_assignments/", {
-                "discriminator": "team",
-                "assignee_id": str(team_id),
-                "content_type": "job_template",
-                "object_id": jt_id,
-                "role_id": role_id,
-            })
+            post(
+                "/role_assignments/",
+                {
+                    "discriminator": "team",
+                    "assignee_id": str(team_id),
+                    "content_type": "job_template",
+                    "object_id": jt_id,
+                    "role_id": role_id,
+                },
+            )
         for user_id in executors.get("users", []):
-            post("/role_assignments/", {
-                "discriminator": "user",
-                "assignee_id": str(user_id),
-                "content_type": "job_template",
-                "object_id": jt_id,
-                "role_id": role_id,
-            })
+            post(
+                "/role_assignments/",
+                {
+                    "discriminator": "user",
+                    "assignee_id": str(user_id),
+                    "content_type": "job_template",
+                    "object_id": jt_id,
+                    "role_id": role_id,
+                },
+            )
 
 
 def run_pattern_task(pattern_id: int, task_id: int):

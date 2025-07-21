@@ -1,25 +1,15 @@
-from pydantic_settings import BaseSettings
-from pydantic import Field, field_validator
 from urllib.parse import urlparse
+
+from pydantic import Field
+from pydantic import field_validator
+from pydantic_settings import BaseSettings
 
 
 class AAPSettings(BaseSettings):
-    url: str = Field(
-        "https://localhost:5000",
-        env=["AAP_URL", "CONTROLLER_URL", "TOWER_URL"]
-    )
-    username: str = Field(
-        "defaultuser",
-        env=["AAP_USERNAME", "CONTROLLER_USERNAME", "TOWER_USERNAME"]
-    )
-    password: str = Field(
-        "defaultpass",
-        env=["AAP_PASSWORD", "CONTROLLER_PASSWORD", "TOWER_PASSWORD"]
-    )
-    verify_ssl: bool = Field(
-        False,
-        env=["AAP_VALIDATE_CERTS", "CONTROLLER_VERIFY_SSL", "TOWER_VERIFY_SSL"]
-    )
+    url: str = Field("https://localhost:5000", env=["AAP_URL", "CONTROLLER_URL", "TOWER_URL"])
+    username: str = Field("defaultuser", env=["AAP_USERNAME", "CONTROLLER_USERNAME", "TOWER_USERNAME"])
+    password: str = Field("defaultpass", env=["AAP_PASSWORD", "CONTROLLER_PASSWORD", "TOWER_PASSWORD"])
+    verify_ssl: bool = Field(False, env=["AAP_VALIDATE_CERTS", "CONTROLLER_VERIFY_SSL", "TOWER_VERIFY_SSL"])
 
     @field_validator("url", mode="before")
     @classmethod

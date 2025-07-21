@@ -1,8 +1,8 @@
 from unittest.mock import patch
-from rest_framework.test import APIRequestFactory
 
 from django.urls import reverse
 from rest_framework import status
+from rest_framework.test import APIRequestFactory
 from rest_framework.test import APITestCase
 
 from core.models import Automation
@@ -148,7 +148,7 @@ class PatternInstanceViewSetTest(SharedDataMixin, APITestCase):
             "executors": [{"executor_type": "container"}],
             "pattern": self.another_pattern.id,
         }
-    
+
     def test_pattern_instance_list_view(self):
         url = reverse("patterninstance-list")
         response = self.client.get(url)
@@ -159,7 +159,7 @@ class PatternInstanceViewSetTest(SharedDataMixin, APITestCase):
         url = reverse("patterninstance-detail", args=[self.pattern_instance.pk])
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data["organization_id"], 1)    
+        self.assertEqual(response.data["organization_id"], 1)
 
     @patch('core.views.run_pattern_instance_task')
     def test_create_pattern_instance_and_task(self, mock_run_task):
@@ -185,4 +185,3 @@ class PatternInstanceViewSetTest(SharedDataMixin, APITestCase):
 
         # Assert the background task was scheduled with correct args
         mock_run_task.assert_called_once_with(instance.id, task.id)
-    

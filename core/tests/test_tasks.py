@@ -2,11 +2,12 @@ import json
 import os
 import shutil
 import tempfile
-import requests
 from typing import List
+from unittest.mock import MagicMock
 from unittest.mock import mock_open
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
+import requests
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -16,8 +17,9 @@ from core.models import ControllerLabel
 from core.models import Pattern
 from core.models import PatternInstance
 from core.models import Task
-from core.tasks import run_pattern_instance_task
-from core.tasks import get_http_session, _aap_session, post
+from core.tasks import _aap_session
+from core.tasks import get_http_session
+from core.tasks import post
 from core.tasks import run_pattern_instance_task
 from core.tasks import run_pattern_task
 
@@ -32,7 +34,7 @@ class SharedDataMixin:
             collection_version="1.0.0",
             collection_version_uri="https://example.com/mynamespace/mycollection/",
             pattern_name="example_pattern",
-            #pattern_definition={"key": "value"},
+            # pattern_definition={"key": "value"},
             pattern_definition={
                 "schema_version": "1.0",
                 "name": "demo_pattern",
@@ -40,20 +42,11 @@ class SharedDataMixin:
                 "description": "This pattern provisions a demo resource using AAP.",
                 "short_description": "Provision demo resource",
                 "aap_resources": {
-                            "controller_project": {
-                                "name": "Demo Project",
-                                "description": "A demo project for testing"
-                            },
-                            "controller_job_templates": [
-                                {
-                                    "name": "Run demo job",
-                                    "description": "Runs the demo automation",
-                                    "playbook": "main.yml"
-                                }
-                            ]
-                        }
-                    }
-            )
+                    "controller_project": {"name": "Demo Project", "description": "A demo project for testing"},
+                    "controller_job_templates": [{"name": "Run demo job", "description": "Runs the demo automation", "playbook": "main.yml"}],
+                },
+            },
+        )
 
         cls.pattern_instance = PatternInstance.objects.create(
             organization_id=1,
@@ -75,7 +68,7 @@ class SharedDataMixin:
         )
 
         cls.task = Task.objects.create(status="Running", details={"progress": "50%"})
-    
+
     def register_temp_dir(self, path: str):
         self.temp_dirs.append(path)
 
@@ -104,7 +97,7 @@ class SharedDataMixin:
         self.temp_dirs.clear()
 
 
-class PatternInstanceViewSetTest(SharedDataMixin, APITestCase):  
+class PatternInstanceViewSetTest(SharedDataMixin, APITestCase):
     # ---------------------------------------------------------------------------
     # run_pattern_instance_task(): success case
     # ---------------------------------------------------------------------------
@@ -136,9 +129,7 @@ class PatternInstanceViewSetTest(SharedDataMixin, APITestCase):
             task_id=self.task.id,
         )
 
-        mock_create_project.assert_called_once_with(
-            self.pattern_instance, self.pattern, self.pattern.pattern_definition
-        )
+        mock_create_project.assert_called_once_with(self.pattern_instance, self.pattern, self.pattern.pattern_definition)
         mock_assign_roles.assert_called_once()
 
         # Ensure task marked Completed
