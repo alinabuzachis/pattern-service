@@ -2,20 +2,22 @@ import json
 import os
 import shutil
 import tempfile
+import requests
 from typing import List
 from unittest.mock import mock_open
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
-from django.test import TestCase
 
 from core.models import Automation
 from core.models import ControllerLabel
 from core.models import Pattern
 from core.models import PatternInstance
 from core.models import Task
+from core.tasks import run_pattern_instance_task
+from core.tasks import get_http_session, _aap_session, post
 from core.tasks import run_pattern_instance_task
 from core.tasks import run_pattern_task
 
@@ -30,8 +32,28 @@ class SharedDataMixin:
             collection_version="1.0.0",
             collection_version_uri="https://example.com/mynamespace/mycollection/",
             pattern_name="example_pattern",
-            pattern_definition={"key": "value"},
-        )
+            #pattern_definition={"key": "value"},
+            pattern_definition={
+                "schema_version": "1.0",
+                "name": "demo_pattern",
+                "title": "Create a demo resource",
+                "description": "This pattern provisions a demo resource using AAP.",
+                "short_description": "Provision demo resource",
+                "aap_resources": {
+                            "controller_project": {
+                                "name": "Demo Project",
+                                "description": "A demo project for testing"
+                            },
+                            "controller_job_templates": [
+                                {
+                                    "name": "Run demo job",
+                                    "description": "Runs the demo automation",
+                                    "playbook": "main.yml"
+                                }
+                            ]
+                        }
+                    }
+            )
 
         cls.pattern_instance = PatternInstance.objects.create(
             organization_id=1,
@@ -53,46 +75,109 @@ class SharedDataMixin:
         )
 
         cls.task = Task.objects.create(status="Running", details={"progress": "50%"})
+    
+    def register_temp_dir(self, path: str):
+        self.temp_dirs.append(path)
+
+    def create_temp_collection_dir(self) -> str:
+        """
+        Creates and tracks a temp collection directory with pattern.json.
+        """
+        temp_dir = tempfile.mkdtemp()
+        self.register_temp_dir(temp_dir)
+
+        collection_path = os.path.join(temp_dir, "mynamespace-mycollection-1.0.0")
+        pattern_dir = os.path.join(collection_path, "extensions", "patterns", "example_pattern", "meta")
+        os.makedirs(pattern_dir, exist_ok=True)
+
+        with open(os.path.join(pattern_dir, "pattern.json"), "w") as f:
+            json.dump({"mock_key": "mock_value"}, f)
+
+        return collection_path
+
+    def tearDown(self):
+        """
+        Automatically called after each test. Cleans up any temp dirs created.
+        """
+        for temp_dir in getattr(self, "temp_dirs", []):
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        self.temp_dirs.clear()
 
 
-class PatternInstanceViewSetTest(SharedDataMixin, APITestCase):
-    def test_pattern_instance_list_view(self):
-        url = reverse("patterninstance-list")
-        response = self.client.get(url)
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data), 1)
+class PatternInstanceViewSetTest(SharedDataMixin, APITestCase):  
+    # ---------------------------------------------------------------------------
+    # run_pattern_instance_task(): success case
+    # ---------------------------------------------------------------------------
 
-    def test_pattern_instance_detail_view(self):
-        url = reverse("patterninstance-detail", args=[self.pattern_instance.pk])
-        response = self.client.get(url)
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data["organization_id"], 1)
+    @patch("core.tasks.assign_execute_roles")
+    @patch("core.tasks.save_instance_state")
+    @patch("core.tasks.create_job_templates")
+    @patch("core.tasks.create_labels")
+    @patch("core.tasks.create_execution_environment")
+    @patch("core.tasks.create_controller_project")
+    @patch("core.tasks.update_task_status")
+    def test_run_pattern_instance_success(
+        self,
+        mock_update_status,
+        mock_create_project,
+        mock_create_ee,
+        mock_create_labels,
+        mock_create_jts,
+        mock_save_instance,
+        mock_assign_roles,
+    ):
+        mock_create_project.side_effect = [321]
+        mock_create_ee.side_effect = [654]
+        mock_create_labels.side_effect = [[]]
+        mock_create_jts.side_effect = [[]]
 
-    @patch("core.views.async_to_sync")
-    def test_pattern_instance_create_view(self, mock_async_to_sync):
-        url = reverse("patterninstance-list")
-        data = {
-            "organization_id": 2,
-            "controller_project_id": 0,
-            "controller_ee_id": 0,
-            "credentials": {"user": "tester"},
-            "executors": [],
-            "pattern": self.pattern.id,
-        }
+        run_pattern_instance_task(
+            instance_id=self.pattern_instance.id,
+            task_id=self.task.id,
+        )
 
-        response = self.client.post(url, data, format="json")
-        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        mock_create_project.assert_called_once_with(
+            self.pattern_instance, self.pattern, self.pattern.pattern_definition
+        )
+        mock_assign_roles.assert_called_once()
 
-        instance = PatternInstance.objects.get(organization_id=2)
-        self.assertIsNotNone(instance)
+        # Ensure task marked Completed
+        mock_update_status.assert_any_call(self.task, "Completed", {"info": "PatternInstance processed"})
 
-        task_id = response.data["task_id"]
-        task = Task.objects.get(id=task_id)
-        self.assertEqual(task.status, "Initiated")
+    # ---------------------------------------------------------------------------
+    # run_pattern_instance_task(): failure case
+    # ---------------------------------------------------------------------------
 
-        mock_async_to_sync.assert_called_once()
-        self.assertIn("task_id", response.data)
-        self.assertIn("message", response.data)
+    @patch("core.tasks.assign_execute_roles")
+    @patch("core.tasks.save_instance_state")
+    @patch("core.tasks.create_job_templates")
+    @patch("core.tasks.create_labels")
+    @patch("core.tasks.create_execution_environment")
+    @patch("core.tasks.create_controller_project")
+    @patch("core.tasks.update_task_status")
+    def test_failure_path(
+        self,
+        mock_update_status,
+        mock_create_project,
+        *_,
+    ):
+        # Simulate failure inside create_controller_project
+        mock_create_project.side_effect = RuntimeError("error")
+
+        # No exception should propagate because the task function swallows it
+        run_pattern_instance_task(
+            instance_id=self.pattern_instance.id,
+            task_id=self.task.id,
+        )
+
+        # Verify that the task was marked Failed with the right message
+        mock_update_status.assert_any_call(
+            self.task,
+            "Failed",
+            {"error": "error"},
+        )
+
+        mock_create_project.assert_called_once()
 
 
 class AutomationViewSetTest(SharedDataMixin, APITestCase):
@@ -123,37 +208,10 @@ class ControllerLabelViewSetTest(SharedDataMixin, APITestCase):
         self.assertIn('id', response.data)
         self.assertIn('label_id', response.data)
         self.assertEqual(response.data['label_id'], 5)
-        cls.task = Task.objects.create(status="Running", details={"progress": "50%"})
-
-    def register_temp_dir(self, path: str):
-        self.temp_dirs.append(path)
-
-    def create_temp_collection_dir(self) -> str:
-        """
-        Creates and tracks a temp collection directory with pattern.json.
-        """
-        temp_dir = tempfile.mkdtemp()
-        self.register_temp_dir(temp_dir)
-
-        collection_path = os.path.join(temp_dir, "mynamespace-mycollection-1.0.0")
-        pattern_dir = os.path.join(collection_path, "extensions", "patterns", "example_pattern", "meta")
-        os.makedirs(pattern_dir, exist_ok=True)
-
-        with open(os.path.join(pattern_dir, "pattern.json"), "w") as f:
-            json.dump({"mock_key": "mock_value"}, f)
-
-        return collection_path
-
-    def tearDown(self):
-        """
-        Automatically called after each test. Cleans up any temp dirs created.
-        """
-        for temp_dir in getattr(self, "temp_dirs", []):
-            shutil.rmtree(temp_dir, ignore_errors=True)
-        self.temp_dirs.clear()
+        self.task = Task.objects.create(status="Running", details={"progress": "50%"})
 
 
-class TaskTests(SharedDataMixin, TestCase):
+class TaskTests(SharedDataMixin, APITestCase):
 
     def test_run_pattern_task_handles_download_failure(self):
         pattern = self.pattern

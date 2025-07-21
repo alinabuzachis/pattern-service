@@ -6,9 +6,10 @@ import os
 import shutil
 import tarfile
 import tempfile
-from typing import Iterator
+from typing import Iterator, Optional, Sequence
 from django.db import transaction
 
+from urllib.parse import urlparse
 from requests import Session
 from requests.auth import HTTPBasicAuth
 from django.conf import settings
@@ -19,11 +20,17 @@ from .models import Pattern
 from .models import PatternInstance
 from .models import ControllerLabel
 from .models import Task
+from pattern_service.settings.aap import AAP_SETTINGS
+
+from typing import List, Dict, Any
+
 
 logger = logging.getLogger(__name__)
 
+_aap_session: Optional[Session] = None
 
-def update_task_status(task: Task, status_: str, details: dict):
+
+def update_task_status(task: Task, status_: str, details: Dict):
     task.status = status_
     task.details = details
     task.save()
@@ -54,32 +61,88 @@ def download_collection(url: str, collection: str, version: str) -> Iterator[str
         shutil.rmtree(temp_base_dir)
 
 
-def get_http_session() -> Session:
-    """Returns a session with Basic Auth for AAP."""
-    session = Session()
-    session.auth = HTTPBasicAuth(settings.AAP_USERNAME, settings.AAP_PASSWORD)
-    session.verify = settings.AAP_VERIFY_SSL
-    session.headers.update({'Content-Type': 'application/json'})
+def get_http_session(force_refresh: bool = False) -> Session:
+    """Returns a cached Session instance with AAP credentials."""
+    global _aap_session
+    if _aap_session is None or force_refresh:
+        session = Session()
 
-    return session
+        # Temporarily: to allow working in an unauthenticated way
+        if AAP_SETTINGS.username and AAP_SETTINGS.password:
+            session.auth = HTTPBasicAuth(AAP_SETTINGS.username, AAP_SETTINGS.password)
 
-def post_api(path: str, data: dict) -> dict:
+        # session.auth = HTTPBasicAuth(AAP_SETTINGS.username, AAP_SETTINGS.password)
+        session.verify = AAP_SETTINGS.verify_ssl
+        session.headers.update({'Content-Type': 'application/json'})
+        _aap_session = session
+
+    return _aap_session
+
+
+def post(
+    path: str,
+    data: Dict,
+    *,
+    dedupe_keys: Sequence[str] = ("name", "organization"),
+) -> Dict:
+    """
+    Create a resource on the AAP controller.
+
+    If the POST fails with 400 because the object already exists,
+    perform a GET lookup using *dedupe_keys* taken from *data* and
+    return the existing object instead.
+
+    Args:
+        path: Controller endpoint, e.g. "/projects/" (must include trailing slash).
+        data: JSON payload to send.
+        dedupe_keys: Keys from *data* to copy into the lookup query string when handling
+            a duplicate‑name error.
+
+    Returns:
+        JSON for the created or pre‑existing object.
+
+    Raises:
+        requests.HTTPError
+            Propagated if the status code is not a handled 400 or if the lookup
+            returns no result.
+    """
     session = get_http_session()
-    response = session.post(f"{settings.AAP_URL.rstrip('/')}/api/v2{path}", json=data)
+    url = f"{AAP_SETTINGS.url}{path}"
+
+    try:
+        response = session.post(url, json=data)
+        response.raise_for_status()
+        return response.json()
+
+    except requests.exceptions.HTTPError as exc:
+        if exc.response.status_code != 400:
+            raise
+
+        logger.debug(
+            f"AAP POST {url} returned 400. Attempting dedup lookup with keys {str(dedupe_keys)}"
+        )
+
+        # Build ?name=foo&organization=123 query if those keys exist in *data*
+        params = {k: data[k] for k in dedupe_keys if k in data}
+        lookup_resp = session.get(url, params=params)
+        lookup_resp.raise_for_status()
+        results = lookup_resp.json().get("results", [])
+        if not results:
+            raise
+
+        logger.debug(f"Resource with this name already exists. Retrieved resource: {results[0]}")
+        return results[0]
+
+
+def get(path: str, *, params: Optional[Dict] = None) -> Dict:
+    session = get_http_session()
+    response = session.get(f"{AAP_SETTINGS.url}{path}", params=params)
     response.raise_for_status()
 
     return response.json()
 
 
-def get_api(path: str, params=None) -> dict:
-    session = get_http_session()
-    response = session.get(f"{settings.AAP_URL.rstrip('/')}/api/v2{path}", params=params)
-    response.raise_for_status()
-
-    return response.json()
-
-
-def create_controller_project(instance: PatternInstance, pattern: Pattern, pattern_def: dict) -> int:
+def create_controller_project(instance: PatternInstance, pattern: Pattern, pattern_def: Dict) -> int:
     """
     Creates a controller project on AAP using the pattern definition.
 
@@ -98,13 +161,14 @@ def create_controller_project(instance: PatternInstance, pattern: Pattern, patte
         "scm_url": pattern.collection_version_uri,
         "credential": instance.credentials.get("project"),
     })
+    
     logger.debug(f"Project definition: {project_def}")
-    response = post_api("/projects/", project_def)
+    response = post("/projects/", project_def)
 
     return response["id"]
 
 
-def create_execution_environment(instance: PatternInstance, pattern_def: dict) -> int:
+def create_execution_environment(instance: PatternInstance, pattern_def: Dict) -> int:
     """
     Creates an execution environment for the controller.
 
@@ -120,14 +184,16 @@ def create_execution_environment(instance: PatternInstance, pattern_def: dict) -
     ee_def.update({
         "organization": instance.organization_id,
         "credential": instance.credentials.get("ee"),
-        "image": f"{urllib.parse.urlparse(settings.AAP_URL).netloc}/{image_name}",
+        "image": f"{urlparse.urlparse(AAP_SETTINGS.url).netloc}/{image_name}",
         "pull": ee_def.get("pull") or "missing",
     })
-    logger.debug(f"EE definition: {ee_def}")
-    return client.create_controller_ee(ee_def)
+    logger.debug(f"Execution Environment definition: {ee_def}")
+    response = post("/execution_environments/", ee_def)
+
+    return response["id"]
 
 
-def create_labels(instance: PatternInstance, pattern_def: dict) -> List[ControllerLabel]:
+def create_labels(instance: PatternInstance, pattern_def: Dict) -> List[ControllerLabel]:
     """
     Creates controller labels and returns model instances.
 
@@ -140,17 +206,22 @@ def create_labels(instance: PatternInstance, pattern_def: dict) -> List[Controll
     """
     labels = []
     for name in pattern_def["aap_resources"]["controller_labels"]:
-        label_def = {"name": name, "organization": instance.organization_id}
-        logger.debug(f"Label definition: {label_def}")
-        label_id = client.create_controller_label(label_def)
-        label_obj, _ = ControllerLabel.objects.get_or_create(label_id=label_id)
+        label_def = {
+            "name": name,
+            "organization": instance.organization_id
+        }
+        logger.debug(f"Creating label with definition: {label_def}")
+        
+        results = post("/labels/", label_def)
+        label_obj, _ = ControllerLabel.objects.get_or_create(label_id=results["id"])
         labels.append(label_obj)
+
     return labels
 
 
 def create_job_templates(
     instance: PatternInstance,
-    pattern_def: dict,
+    pattern_def: Dict,
     project_id: int,
     ee_id: int
 ) -> List[Dict[str, Any]]:
@@ -167,21 +238,35 @@ def create_job_templates(
         List of dictionaries describing created automations.
     """
     automations = []
-    for jt in pattern_def["aap_resources"]["controller_job_templates"]:
+    jt_defs = pattern_def["aap_resources"]["controller_job_templates"]
+
+    for jt in jt_defs:
         survey = jt.pop("survey", None)
         primary = jt.pop("primary", False)
-        jt.update({
+
+        jt_payload = {
+            **jt,
             "organization": instance.organization_id,
             "project": project_id,
             "execution_environment": ee_id,
             "playbook": f"extensions/patterns/{pattern_def['name']}/playbooks/{jt['playbook']}",
             "ask_inventory_on_launch": True,
-        })
-        logger.debug(f"Job template: {jt}")
-        jt_id = client.create_controller_job_template(jt)
+        }
+
+        logger.debug(f"Creating job template with payload: {jt_payload}")
+        jt_res = post("/job_templates/", jt_payload)
+        jt_id = jt_res["id"]
+
         if survey:
-            client.create_controller_job_template_survey(jt_id, survey)
-        automations.append({"type": "job_template", "id": jt_id, "primary": primary})
+            logger.debug(f"Adding survey to job template {jt_id}")
+            post(f"/job_templates/{jt_id}/survey_spec/", {"spec": survey})
+
+        automations.append({
+            "type": "job_template",
+            "id": jt_id,
+            "primary": primary
+        })
+
     return automations
 
 
@@ -204,7 +289,7 @@ def save_instance_state(
     """
     with transaction.atomic():
         instance.controller_project_id = project_id
-        instance.controller_execution_environment_id = ee_id
+        instance.controller_ee_id = ee_id
         instance.save()
         for label in labels:
             instance.controller_labels.add(label)
@@ -229,12 +314,32 @@ def assign_execute_roles(
     """
     if not executors["teams"] and not executors["users"]:
         return
-    role_id = client.get_role_definition_id("JobTemplate Execute")
+
+    # Get role ID for "Execute" on JobTemplate
+    roles_resp = get("/roles/", params={"name": "Execute", "content_type": "job_template"})
+    if not roles_resp["results"]:
+        raise ValueError("Could not find 'JobTemplate Execute' role.")
+
+    role_id = roles_resp["results"][0]["id"]
+
     for auto in automations:
-        for team in executors["teams"]:
-            client.create_controller_role_assignment("team", auto["id"], role_id, str(team))
-        for user in executors["users"]:
-            client.create_controller_role_assignment("user", auto["id"], role_id, str(user))
+        jt_id = auto["id"]
+        for team_id in executors.get("teams", []):
+            post("/role_assignments/", {
+                "discriminator": "team",
+                "assignee_id": str(team_id),
+                "content_type": "job_template",
+                "object_id": jt_id,
+                "role_id": role_id,
+            })
+        for user_id in executors.get("users", []):
+            post("/role_assignments/", {
+                "discriminator": "user",
+                "assignee_id": str(user_id),
+                "content_type": "job_template",
+                "object_id": jt_id,
+                "role_id": role_id,
+            })
 
 
 def run_pattern_task(pattern_id: int, task_id: int):

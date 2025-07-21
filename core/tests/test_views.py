@@ -1,3 +1,6 @@
+from unittest.mock import patch
+from rest_framework.test import APIRequestFactory
+
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -7,8 +10,7 @@ from core.models import ControllerLabel
 from core.models import Pattern
 from core.models import PatternInstance
 from core.models import Task
-from core.tasks import run_pattern_instance_task
-from core.tasks import run_pattern_task
+from core.views import PatternInstanceViewSet
 
 
 class SharedDataMixin:
@@ -126,6 +128,27 @@ class PatternViewSetTest(SharedDataMixin, APITestCase):
 
 
 class PatternInstanceViewSetTest(SharedDataMixin, APITestCase):
+    def setUp(self):
+        self.factory = APIRequestFactory()
+        self.view = PatternInstanceViewSet.as_view({'post': 'create'})
+
+        self.another_pattern = Pattern.objects.create(
+            collection_name="another.collection",
+            collection_version="1.0.1",
+            collection_version_uri="https://example.com/another/collection/",
+            pattern_name="another_pattern",
+            pattern_definition={"key": "value2"},
+        )
+
+        self.valid_payload = {
+            "organization_id": 1,
+            "controller_project_id": 123,
+            "controller_ee_id": 456,
+            "credentials": {"user": "admin"},
+            "executors": [{"executor_type": "container"}],
+            "pattern": self.another_pattern.id,
+        }
+    
     def test_pattern_instance_list_view(self):
         url = reverse("patterninstance-list")
         response = self.client.get(url)
@@ -136,28 +159,30 @@ class PatternInstanceViewSetTest(SharedDataMixin, APITestCase):
         url = reverse("patterninstance-detail", args=[self.pattern_instance.pk])
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data["organization_id"], 1)
+        self.assertEqual(response.data["organization_id"], 1)    
 
-    def test_pattern_instance_create_view(self):
-        url = reverse("patterninstance-list")
-        data = {
-            "organization_id": 2,
-            "controller_project_id": 0,
-            "controller_ee_id": 0,
-            "credentials": {"user": "tester"},
-            "executors": [],
-            "pattern": self.pattern.id,
-        }
+    @patch('core.views.run_pattern_instance_task')
+    def test_create_pattern_instance_and_task(self, mock_run_task):
+        request = self.factory.post('/patterninstances/', self.valid_payload, format='json')
+        response = self.view(request)
 
-        response = self.client.post(url, data, format="json")
+        # Assert response status is 202
         self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
-        instance = PatternInstance.objects.get(organization_id=2)
-        self.assertIsNotNone(instance)
 
-        task_id = response.data.get("task_id")
-        self.assertIsInstance(task_id, int)
+        # Assert response contains task_id and message
+        self.assertIn('task_id', response.data)
+        self.assertIn('message', response.data)
 
-        task = Task.objects.get(id=task_id)
+        # Check that a PatternInstance was created
+        instance = PatternInstance.objects.last()
+
+        # Check that a Task was created
+        task = Task.objects.last()
+        self.assertIsNotNone(task)
         self.assertEqual(task.status, "Initiated")
         self.assertEqual(task.details.get("model"), "PatternInstance")
         self.assertEqual(task.details.get("id"), instance.id)
+
+        # Assert the background task was scheduled with correct args
+        mock_run_task.assert_called_once_with(instance.id, task.id)
+    
