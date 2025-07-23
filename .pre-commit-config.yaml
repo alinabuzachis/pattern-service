@@ -48,3 +48,9 @@ repos:
     rev: v1.17.0
     hooks:
       - id: mypy
+        additional_dependencies: [
+            "requests",
+            "types-requests",
+            "django-stubs",
+            "djangorestframework-stubs"
+        ]
