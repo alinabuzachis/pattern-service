@@ -15,7 +15,7 @@ from .serializers import ControllerLabelSerializer
 from .serializers import PatternInstanceSerializer
 from .serializers import PatternSerializer
 from .serializers import TaskSerializer
-from .tasks import run_pattern_task
+from .tasks import pattern_task
 
 
 class CoreViewSet(AnsibleBaseView):
@@ -33,7 +33,7 @@ class PatternViewSet(CoreViewSet, ModelViewSet):
 
         task = Task.objects.create(status="Initiated", details={"model": "Pattern", "id": pattern.id})
 
-        run_pattern_task(pattern.id, task.id)
+        pattern_task(pattern.id, task.id)
 
         headers = self.get_success_headers(serializer.data)
 
@@ -43,6 +43,7 @@ class PatternViewSet(CoreViewSet, ModelViewSet):
                 "message": "Pattern creation initiated. Check task status for progress.",
             },
             status=status.HTTP_202_ACCEPTED,
+            headers=headers,
         )
 
 
