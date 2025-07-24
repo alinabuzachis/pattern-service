@@ -21,6 +21,7 @@ from .serializers import PatternInstanceSerializer
 from .serializers import PatternSerializer
 from .serializers import TaskSerializer
 from .tasks import run_pattern_task
+from .tasks import run_pattern_instance_task
 
 
 class CoreViewSet(AnsibleBaseView):
@@ -66,6 +67,7 @@ class PatternInstanceViewSet(CoreViewSet, ModelViewSet):
     def create(self, request: Request, *args: tuple, **kwargs: dict) -> Response:
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+
         # Save initial PatternInstance
         instance = serializer.save()
 
@@ -74,6 +76,10 @@ class PatternInstanceViewSet(CoreViewSet, ModelViewSet):
             status="Initiated", details={"model": "PatternInstance", "id": instance.id}
         )
 
+        # Schedule async background task to enrich this instance
+        run_pattern_instance_task(instance.id, task.id)
+
+        headers = self.get_success_headers(serializer.data)
         return Response(
             {
                 "task_id": task.id,
@@ -82,6 +88,7 @@ class PatternInstanceViewSet(CoreViewSet, ModelViewSet):
                 ),
             },
             status=status.HTTP_202_ACCEPTED,
+            headers=headers,
         )
 
 
