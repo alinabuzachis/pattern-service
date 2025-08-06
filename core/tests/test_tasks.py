@@ -4,19 +4,16 @@ import shutil
 import tempfile
 from typing import List
 from unittest.mock import call
-from unittest.mock import mock_open
 from unittest.mock import patch
 
 from django.test import TestCase
-from rest_framework.test import APITestCase
 
-from core.models import Automation
 from core.models import ControllerLabel
 from core.models import Pattern
 from core.models import PatternInstance
 from core.models import Task
-from core.services import pattern_instance_task
-from core.services import pattern_task
+from core.task_runner import run_pattern_instance_task
+from core.task_runner import run_pattern_task
 
 
 class SharedDataMixin:
@@ -30,24 +27,10 @@ class SharedDataMixin:
             collection_version_uri="https://example.com/mynamespace/mycollection/",
             pattern_name="example_pattern",
             pattern_definition={
-                "schema_version": "1.0",
-                "name": "demo_pattern",
-                "title": "Create a demo resource",
-                "description": "This pattern provisions a demo resource using AAP.",
-                "short_description": "Provision demo resource",
-                "aap_resources": {
-                    "controller_project": {
-                        "name": "Demo Project",
-                        "description": "A demo project for testing",
-                    },
-                    "controller_job_templates": [
-                        {
-                            "name": "Run demo job",
-                            "description": "Runs the demo automation",
-                            "playbook": "main.yml",
-                        }
-                    ],
-                },
+                "key": "value",
+                "execution_environment_id": 10,
+                "executors": ["exec1"],
+                "controller_labels": [5],
             },
         )
 
@@ -62,13 +45,6 @@ class SharedDataMixin:
 
         cls.label = ControllerLabel.objects.create(label_id=5)
         cls.pattern_instance.controller_labels.add(cls.label)
-
-        cls.automation = Automation.objects.create(
-            automation_type="job_template",
-            automation_id=789,
-            primary=True,
-            pattern_instance=cls.pattern_instance,
-        )
 
         cls.task = Task.objects.create(status="Running", details={"progress": "50%"})
 
@@ -102,55 +78,42 @@ class SharedDataMixin:
         self.temp_dirs.clear()
 
 
-class PatternTaskTest(SharedDataMixin, APITestCase):
-    @patch(
-        "core.services.update_task_status",
-        wraps=pattern_task.__globals__["update_task_status"],
-    )
-    @patch("core.services.open", new_callable=mock_open, read_data='{"name": "test"}')
-    @patch("core.services.download_collection")
-    def test_run_pattern_task_success(
-        self, mock_download, mock_open_fn, mock_update_status
-    ):
-        pattern = Pattern.objects.create(
-            collection_name="demo.collection",
-            collection_version="1.0.0",
-            pattern_name="test_pattern",
-        )
-        task = Task.objects.create(status="Initiated", details={})
-        temp_dir = tempfile.mkdtemp()
-        mock_download.return_value.__enter__.return_value = temp_dir
+class PatternTaskTest(SharedDataMixin, TestCase):
+    @patch("core.models.Task.set_status", autospec=True, wraps=Task.set_status)
+    @patch("core.task_runner.download_collection")
+    def test_run_pattern_task_success(self, mock_download, mock_update_status):
+        temp_dir_path = self.create_temp_collection_dir()
+        mock_download.return_value.__enter__.return_value = temp_dir_path
 
-        os.makedirs(
-            os.path.join(temp_dir, "extensions", "patterns", "test_pattern", "meta")
-        )
-        with open(
-            os.path.join(
-                temp_dir,
-                "extensions",
-                "patterns",
-                "test_pattern",
-                "meta",
-                "pattern.json",
-            ),
-            "w",
-        ) as f:
-            f.write(json.dumps({"name": "test"}))
+        run_pattern_task(self.pattern.id, self.task.id)
 
-        pattern_task(pattern.id, task.id)
+        expected_calls = [
+            (self.task, "Running", {"info": "Processing pattern"}),
+            (self.task, "Completed", {"info": "Pattern processed successfully"}),
+        ]
 
-        mock_update_status.assert_any_call(
-            task, "Running", {"info": "Processing pattern"}
-        )
-        mock_update_status.assert_any_call(
-            task, "Completed", {"info": "Pattern processed successfully"}
+        actual_calls = [
+            (call_args[0][0], call_args[0][1], call_args[0][2])
+            for call_args in mock_update_status.call_args_list
+        ]
+
+        # Assert update_task_status calls
+        for expected in expected_calls:
+            self.assertIn(expected, actual_calls)
+
+        # Assert final DB state
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.status, "Completed")
+        self.assertEqual(
+            self.task.details.get("info"), "Pattern processed successfully"
         )
 
-    @patch(
-        "core.services.update_task_status",
-        wraps=pattern_task.__globals__["update_task_status"],
-    )
-    @patch("core.services.download_collection", side_effect=FileNotFoundError)
+        # Assert pattern definition was updated
+        self.pattern.refresh_from_db()
+        self.assertEqual(self.pattern.pattern_definition, {"mock_key": "mock_value"})
+
+    @patch("core.models.Task.set_status", autospec=True)
+    @patch("core.task_runner.download_collection", side_effect=FileNotFoundError)
     def test_run_pattern_task_file_not_found(self, mock_download, mock_update_status):
         pattern = Pattern.objects.create(
             collection_name="demo.collection",
@@ -159,62 +122,30 @@ class PatternTaskTest(SharedDataMixin, APITestCase):
         )
         task = Task.objects.create(status="Initiated", details={})
 
-        pattern_task(pattern.id, task.id)
+        run_pattern_task(pattern.id, task.id)
 
         mock_update_status.assert_called_with(
             task, "Failed", {"error": "Pattern definition not found."}
         )
 
     @patch(
-        "core.services.download_collection", side_effect=Exception("Download failed")
+        "core.task_runner.download_collection", side_effect=Exception("Download failed")
     )
     def test_run_pattern_task_handles_download_failure(self, mock_download):
-        pattern_task(self.pattern.id, self.task.id)
+        run_pattern_task(self.pattern.id, self.task.id)
         self.task.refresh_from_db()
         self.assertEqual(self.task.status, "Failed")
         self.assertIn("Download failed", self.task.details.get("error", ""))
 
-    @patch(
-        "core.services.update_task_status",
-        wraps=pattern_task.__globals__["update_task_status"],
-    )
-    @patch("core.services.download_collection")
-    def test_full_status_update_flow(self, mock_download, mock_update_status):
-        temp_dir_path = self.create_temp_collection_dir()
-        mock_download.return_value.__enter__.return_value = temp_dir_path
-
-        # Run the task
-        pattern_task(self.pattern.id, self.task.id)
-
-        # Verify calls to update_task_status
-        expected_calls = [
-            (self.task, "Running", {"info": "Processing pattern"}),
-            (self.task, "Completed", {"info": "Pattern processed successfully"}),
-        ]
-        actual_calls = [tuple(call.args) for call in mock_update_status.call_args_list]
-        for expected in expected_calls:
-            self.assertIn(expected, actual_calls)
-
-        # Verify final DB state
-        self.task.refresh_from_db()
-        self.assertEqual(self.task.status, "Completed")
-        self.assertEqual(
-            self.task.details.get("info"), "Pattern processed successfully"
-        )
-
-        # Verify pattern_definition was updated and saved
-        self.pattern.refresh_from_db()
-        self.assertEqual(self.pattern.pattern_definition, {"mock_key": "mock_value"})
-
 
 class PatternInstanceTaskTest(SharedDataMixin, TestCase):
-    @patch("core.services.assign_execute_roles")
-    @patch("core.services.save_instance_state")
-    @patch("core.services.create_job_templates")
-    @patch("core.services.create_labels")
-    @patch("core.services.create_execution_environment")
-    @patch("core.services.create_project")
-    @patch("core.services.update_task_status")
+    @patch("core.task_runner.assign_execute_roles")
+    @patch("core.task_runner.save_instance_state")
+    @patch("core.task_runner.create_job_templates")
+    @patch("core.task_runner.create_labels")
+    @patch("core.task_runner.create_execution_environment")
+    @patch("core.task_runner.create_project")
+    @patch("core.models.Task.set_status", autospec=True)
     def test_run_pattern_instance_success(
         self,
         mock_update_status,
@@ -230,7 +161,7 @@ class PatternInstanceTaskTest(SharedDataMixin, TestCase):
         mock_create_labels.side_effect = [[]]
         mock_create_jts.side_effect = [[]]
 
-        pattern_instance_task(
+        run_pattern_instance_task(
             instance_id=self.pattern_instance.id,
             task_id=self.task.id,
         )
@@ -253,13 +184,13 @@ class PatternInstanceTaskTest(SharedDataMixin, TestCase):
             ]
         )
 
-    @patch("core.services.assign_execute_roles")
-    @patch("core.services.save_instance_state")
-    @patch("core.services.create_job_templates")
-    @patch("core.services.create_labels")
-    @patch("core.services.create_execution_environment")
-    @patch("core.services.create_project")
-    @patch("core.services.update_task_status")
+    @patch("core.task_runner.assign_execute_roles")
+    @patch("core.task_runner.save_instance_state")
+    @patch("core.task_runner.create_job_templates")
+    @patch("core.task_runner.create_labels")
+    @patch("core.task_runner.create_execution_environment")
+    @patch("core.task_runner.create_project")
+    @patch("core.models.Task.set_status", autospec=True)
     def test_failure_path(
         self,
         mock_update_status,
@@ -270,7 +201,7 @@ class PatternInstanceTaskTest(SharedDataMixin, TestCase):
         mock_create_project.side_effect = RuntimeError("error")
 
         # No exception should propagate because the task function swallows it
-        pattern_instance_task(
+        run_pattern_instance_task(
             instance_id=self.pattern_instance.id,
             task_id=self.task.id,
         )

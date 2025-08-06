@@ -5,19 +5,20 @@ from dynaconf import Dynaconf
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Load defaults first, then override with .env or environment variables
-settings = Dynaconf(
+# Load from dev and PATTERN_SERVICE_* env variables
+_settings = Dynaconf(
     settings_files=[
-        os.path.join(BASE_DIR, "defaults.py"),
-        os.path.join(BASE_DIR, "..", ".env"),
-    ],  # defaults, then env overrides
-    envvar_prefix="AAP",
+        os.path.join(BASE_DIR, "defaults_development.py"),
+        os.path.join(BASE_DIR, "testing_defaults.py"),
+    ],
+    envvar_prefix="PATTERN_SERVICE",
     envvar_cast=True,
     load_dotenv=True,
 )
 
 
-def validate_url(url: str) -> str:
+def _validate_url(url: str) -> str:
+    """Ensure the URL has a valid scheme and format."""
     if not url.startswith(("http://", "https://")):
         url = f"http://{url}"
     parsed = urlparse(url)
@@ -26,23 +27,8 @@ def validate_url(url: str) -> str:
     return url.rstrip("/")
 
 
-class AAPSettings:
-    def __init__(self) -> None:
-        raw_url = settings.get("URL")  # Changed from "INTERNAL_URL" to "URL"
-        if not raw_url:
-            raise ValueError("AAP_URL is required")
-        self.url = validate_url(raw_url)
-
-        self.verify_ssl = settings.get("VALIDATE_CERTS", False)
-
-        self.username = settings.get("USERNAME")
-        if not self.username:
-            raise ValueError("AAP_USERNAME is required")
-
-        self.password = settings.get("PASSWORD")
-        if not self.password:
-            raise ValueError("AAP_PASSWORD is required")
-
-
-def get_aap_settings() -> AAPSettings:
-    return AAPSettings()
+# Exposed config values
+AAP_URL = _validate_url(_settings.AAP_URL)
+AAP_VALIDATE_CERTS = _settings.AAP_VALIDATE_CERTS
+AAP_USERNAME = _settings.AAP_USERNAME
+AAP_PASSWORD = _settings.AAP_PASSWORD
