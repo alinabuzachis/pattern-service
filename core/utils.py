@@ -13,13 +13,13 @@ from typing import Iterator
 from typing import List
 from typing import Optional
 from urllib.parse import urljoin
+from urllib.parse import urlparse
 
+from django.conf import settings
 from django.db import transaction
 from requests.exceptions import HTTPError
 from requests.exceptions import RequestException
 from requests.exceptions import Timeout
-
-from pattern_service.settings.aap import AAP_URL
 
 from .controller_client import get
 from .controller_client import get_http_session
@@ -42,6 +42,16 @@ class RetryError(Exception):
         self.response = response
 
 
+def validate_url(url: str) -> str:
+    """Ensure the URL has a valid scheme and format."""
+    if not url.startswith(("http://", "https://")):
+        url = f"http://{url}"
+    parsed = urlparse(url)
+    if not parsed.scheme or not parsed.netloc:
+        raise ValueError(f"Invalid URL: {url}")
+    return url.rstrip("/")
+
+
 def build_collection_uri(collection: str, version: str) -> str:
     """
     Builds the full URI for a given collection and version.
@@ -54,7 +64,7 @@ def build_collection_uri(collection: str, version: str) -> str:
     path = "/api/galaxy/v3/plugin/ansible/content/published/collections/artifacts"
     filename = f"{collection}-{version}.tar.gz"
 
-    return urljoin(f"{AAP_URL}/", f"{path}/{filename}")
+    return urljoin(f"{settings.AAP_URL}/", f"{path}/{filename}")
 
 
 @contextlib.contextmanager
@@ -131,7 +141,7 @@ def create_execution_environment(
         {
             "organization": instance.organization_id,
             "credential": instance.credentials.get("ee"),
-            "image": f"{AAP_URL.split('//')[-1]}/{image_name}",
+            "image": f"{settings.AAP_URL.split('//')[-1]}/{image_name}",
             "pull": ee_def.get("pull") or "missing",
         }
     )
@@ -284,7 +294,9 @@ def wait_for_project_sync(
         RequestException: For connection-related errors (e.g., network failures).
     """
     session = get_http_session()
-    url = urllib.parse.urljoin(AAP_URL, f"/api/controller/v2/projects/{project_id}")
+    url = urllib.parse.urljoin(
+        settings.AAP_URL, f"/api/controller/v2/projects/{project_id}"
+    )
     delay = initial_delay
 
     for attempt in range(1, max_retries + 1):

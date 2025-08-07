@@ -22,7 +22,7 @@ def run_pattern_task(pattern_id: int, task_id: int) -> None:
     Orchestrates downloading a collection and saving a pattern definition.
     Args:
         pattern_id (int): The ID of the pattern to process.
-        task_id (int): The ID of the task..
+        task_id (int): The ID of the task.
     Raises:
         FileNotFoundError: If the pattern definition is not found.
         Exception: If any other error occurs.

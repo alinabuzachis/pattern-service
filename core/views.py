@@ -20,8 +20,6 @@ from .serializers import ControllerLabelSerializer
 from .serializers import PatternInstanceSerializer
 from .serializers import PatternSerializer
 from .serializers import TaskSerializer
-from .task_runner import run_pattern_instance_task
-from .task_runner import run_pattern_task
 
 
 class CoreViewSet(AnsibleBaseView):

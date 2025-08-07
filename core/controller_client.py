@@ -10,13 +10,9 @@ from typing import Sequence
 from typing import TypeVar
 
 import requests
+from django.conf import settings
 from requests import Session
 from requests.auth import HTTPBasicAuth
-
-from pattern_service.settings.aap import AAP_PASSWORD
-from pattern_service.settings.aap import AAP_URL
-from pattern_service.settings.aap import AAP_USERNAME
-from pattern_service.settings.aap import AAP_VALIDATE_CERTS
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +23,8 @@ F = TypeVar("F", bound=Callable[..., requests.Response])
 def get_http_session() -> Session:
     """Creates and returns a new Session instance with AAP credentials."""
     session = Session()
-    session.auth = HTTPBasicAuth(AAP_USERNAME, AAP_PASSWORD)
-    session.verify = AAP_VALIDATE_CERTS
+    session.auth = HTTPBasicAuth(settings.AAP_USERNAME, settings.AAP_PASSWORD)
+    session.verify = settings.AAP_VALIDATE_CERTS
     session.headers.update({"Content-Type": "application/json"})
     return session
 
@@ -87,7 +83,7 @@ def post(
             returns no result.
     """
     session = get_http_session()
-    url = urllib.parse.urljoin(AAP_URL, path)
+    url = urllib.parse.urljoin(settings.AAP_URL, path)
     try:
         response = session.post(url, json=data)
         response.raise_for_status()
