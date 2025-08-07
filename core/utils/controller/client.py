@@ -1,7 +1,6 @@
 import json
 import logging
 import urllib.parse
-from functools import wraps
 from typing import Any
 from typing import Callable
 from typing import Dict
@@ -13,6 +12,8 @@ import requests
 from django.conf import settings
 from requests import Session
 from requests.auth import HTTPBasicAuth
+
+from ..http_helpers import safe_json
 
 logger = logging.getLogger(__name__)
 
@@ -27,29 +28,6 @@ def get_http_session() -> Session:
     session.verify = settings.AAP_VALIDATE_CERTS
     session.headers.update({"Content-Type": "application/json"})
     return session
-
-
-def safe_json(func: F) -> Callable[..., dict[str, Any]]:
-    """
-    Decorator for functions that return a `requests.Response`.
-    It attempts to parse JSON safely and falls back to raw text if needed.
-    """
-
-    @wraps(func)
-    def wrapper(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        response = func(*args, **kwargs)
-        try:
-            return response.json()
-        except ValueError:
-            logger.warning(f"Non-JSON response from {response.url}: {response.text!r}")
-            return {
-                "detail": "Non-JSON response",
-                "text": response.text,
-                "status_code": response.status_code,
-                "url": response.url,
-            }
-
-    return wrapper
 
 
 def get(url: str, *, params: Optional[Dict] = None) -> requests.Response:

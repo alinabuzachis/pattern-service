@@ -11,9 +11,7 @@ from typing import Any
 from typing import Dict
 from typing import Iterator
 from typing import List
-from typing import Optional
 from urllib.parse import urljoin
-from urllib.parse import urlparse
 
 from django.conf import settings
 from django.db import transaction
@@ -21,35 +19,16 @@ from requests.exceptions import HTTPError
 from requests.exceptions import RequestException
 from requests.exceptions import Timeout
 
-from .controller_client import get
-from .controller_client import get_http_session
-from .controller_client import post
-from .models import ControllerLabel
-from .models import Pattern
-from .models import PatternInstance
+from core.models import ControllerLabel
+from core.models import Pattern
+from core.models import PatternInstance
+
+from ..http_helpers import RetryError
+from .client import get
+from .client import get_http_session
+from .client import post
 
 logger = logging.getLogger(__name__)
-
-
-class RetryError(Exception):
-    """Custom exception raised when a retry limit is reached."""
-
-    def __init__(
-        self, msg: str, request: Optional[Any] = None, response: Optional[Any] = None
-    ) -> None:
-        super().__init__(msg)
-        self.request = request
-        self.response = response
-
-
-def validate_url(url: str) -> str:
-    """Ensure the URL has a valid scheme and format."""
-    if not url.startswith(("http://", "https://")):
-        url = f"http://{url}"
-    parsed = urlparse(url)
-    if not parsed.scheme or not parsed.netloc:
-        raise ValueError(f"Invalid URL: {url}")
-    return url.rstrip("/")
 
 
 def build_collection_uri(collection: str, version: str) -> str:
@@ -173,7 +152,10 @@ def create_labels(
 
 
 def create_job_templates(
-    instance: PatternInstance, pattern_def: Dict[str, Any], project_id: int, ee_id: int
+    instance: PatternInstance,
+    pattern_def: Dict[str, Any],
+    project_id: int,
+    ee_id: int,
 ) -> List[Dict[str, Any]]:
     """
     Creates job templates and associated surveys.

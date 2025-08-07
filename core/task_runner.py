@@ -2,17 +2,18 @@ import json
 import logging
 import os
 
+from core.utils.controller import assign_execute_roles
+from core.utils.controller import build_collection_uri
+from core.utils.controller import create_execution_environment
+from core.utils.controller import create_job_templates
+from core.utils.controller import create_labels
+from core.utils.controller import create_project
+from core.utils.controller import download_collection
+from core.utils.controller import save_instance_state
+
 from .models import Pattern
 from .models import PatternInstance
 from .models import Task
-from .utils import assign_execute_roles
-from .utils import build_collection_uri
-from .utils import create_execution_environment
-from .utils import create_job_templates
-from .utils import create_labels
-from .utils import create_project
-from .utils import download_collection
-from .utils import save_instance_state
 
 logger = logging.getLogger(__name__)
 

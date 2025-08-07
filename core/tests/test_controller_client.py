@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import requests
 
-import core.controller_client as cc
+import core.utils.controller.client as cc
 
 
 def _fake_response(status_code: int, payload: dict | list) -> requests.Response:
@@ -26,7 +26,7 @@ def test_get_http_session():
     assert s1 is not s2
 
 
-@patch("core.controller_client.get_http_session")
+@patch("core.utils.controller.client.get_http_session")
 def test_post_success(mock_get_http_session):
     session = MagicMock()
     session.post.return_value = _fake_response(201, {"id": 99})
@@ -36,7 +36,7 @@ def test_post_success(mock_get_http_session):
     session.post.assert_called_once()
 
 
-@patch("core.controller_client.get_http_session")
+@patch("core.utils.controller.client.get_http_session")
 def test_post_duplicate_name(mock_get_http_session):
     session = MagicMock()
     session.post.return_value = _fake_response(400, {"error": "duplicate"})
